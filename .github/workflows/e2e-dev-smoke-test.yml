@@ -1,0 +1,261 @@
+# This workflow triggers the dev-smoke-test using the private containerized build generated from the per-pr-build workflow. The tests are initiated by the e2e-dev-smoke-test-with-per-pr-controller-bundle.yml when a PR is opened or synchronized.
+# Additionally, the tests are triggered under the following conditions:
+# 1. When a PR is created or updated with a new commit, running smoke test against the latest private build
+# 2. When a manual dispatch is initiated (typically for CI testing purposes).
+# 3. (TODO: This is a future enhancement) When a PR is approved and added to the merge queue. Eventually this would replace the e2e-dev-smoke-test.yml workflow.
+
+name: e2e-dev-smoke-test
+on:
+  workflow_dispatch:
+    inputs:
+      containerized:
+        description: "Run the tests in a container"
+        required: false
+        default: false
+        type: boolean
+      test_branch_name:
+        description: "Test branch name"
+        required: true
+        type: string
+      keep_controller:
+        description: "Keep controller for debugging purposes"
+        required: false
+        default: false
+        type: boolean
+      keep_topology:
+        description: "Keep Topology for debugging purposes only. Please use discretion"
+        required: false
+        default: false
+        type: boolean
+      testsuites:
+        description: "Comma-separated list of test suite names, overwrites label"
+        required: false
+        type: string
+      ami_id:
+        description: "Controller AMI ID"
+        required: false
+        type: string
+      controller_version:
+        description: "Controller (init) version or Per PR build version"
+        required: true
+        type: string
+      setup_copilot:
+        description: "Skip controller prep, by default will be False unless with Per PR build"
+        required: false
+        default: false
+        type: boolean
+      use_dns_for_ctlr_ip:
+        description: "Use DNS for controller IP"
+        required: true
+        default: true
+        type: boolean
+      manage_ctlr_dns_enabled:
+        description: "Enable manage controller DNS"
+        required: true
+        default: true
+        type: boolean
+
+  workflow_call:
+    inputs:
+      controller_version:
+        required: true
+        type: string
+      test_branch_name:
+        required: true
+        type: string
+      containerized:
+        required: false
+        type: boolean
+
+env:
+  AWS_ACCESS_KEY_ID: ${{ secrets.AVX_E2E_TEST_WORKER1_ACCESS_KEY }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AVX_E2E_TEST_WORKER1_SECRET_KEY }}
+  AWS_SECRETKEY_ACCESS_ACCOUNT: "devtools-test"
+  AWS_REGION: us-east-1
+  AWS_ACCOUNT_NUMBER: ${{ secrets.AVX_E2E_TEST_WORKER1_WNUMBER }}
+  AVX_E2E_TEST_TESTRAIL_EMAIL: ${{ secrets.AVX_DEVSMOKE_TEST_TESTRAIL_EMAIL }}
+  AVX_E2E_TEST_TESTRAIL_PASSWORD: ${{ secrets.AVX_DEVSMOKE_TEST_TESTRAIL_PASSWORD }}
+  aviatrix_aws_iam_access_account: "AWSIAM"
+  tf_working_directory: "${{ github.workspace }}/cloudn/test-scripts/end-to-end/vendor/controller"
+  ssh_enable_phrase: "${{ secrets.AVX_SSH_ENABLE_7_0 }}"
+  avx_user: "admin"
+  avx_password: "${{ secrets.CONTROLLER_E2E_PASSWORD }}"
+  avx_account: "devtools-test"
+  avx_tf_version: "1.4.6"
+  aviatrix_admin_email: "devtools@aviatrix.com"
+  aviatrix_license_id: "aviatrix.com-fbu-99d2b09d-1645742295.44"
+  cloudn_scripts_x_py_image: "ghcr.io/aviatrixdev/e2e_ubuntu_22-04:202309131600"
+  testrail_url: "https://aviatrix.testrail.io"
+  testrail_project_id: 9
+  testrail_suite_id: 104
+  testrail_plan_id: 10224
+  testrail_milestone_id: 205
+  marker: "e2e_devsmoke"
+  label: "e2e_devsmoke:run"
+  default_branch_name: ${{ github.ref_name }}
+  ami_id: ${{ github.event.inputs.ami_id }}
+  enhanced_ubuntu_image: "ghcr.io/aviatrixdev/cloudn-e2e-base:latest"
+  cloudn_scripts_git_ref: "master"
+  release_process_git_ref: "master"
+  dry_run_args: ""
+  no_destroy_args: ""
+  default_copilot: false
+  GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+  AVX_AUTOMATION_WORKFLOW: "${{ secrets.AVX_AUTOMATION_WORKFLOW }}"
+
+
+permissions:
+  packages: write
+  contents: write
+  actions: write
+  pull-requests: write
+  id-token: write
+jobs:
+  collect-tests-and-deploy-controller:
+    name: Collect Tests & Deploy Controller (${{ inputs.controller_version || github.event.inputs.controller_version }})
+    if: success()
+    runs-on: ubuntu-latest
+    env:
+      controller_version: ${{ inputs.controller_version || github.event.inputs.controller_version }}
+      test_branch_name: ${{ github.event.inputs.test_branch_name }}
+      default_branch_name: "master"
+      default_no_destroy_args: ""
+      default_copilot: false
+      enable_oci_unpublished_image_args: false
+      enable_compute_gallery_image_args: false
+    outputs:
+      # Outputs the list of test cases
+      branch: ${{ steps.branch-name-based-on-trigger.outputs.branch }}
+      avx_password: ${{ env.avx_password }}
+      controller_version: ${{ env.controller_version }}
+      pr_version: ${{ env.controller_version }}
+      temp_branch: ${{ env.temp_branch }}
+      checkout_branch: ${{ env.checkout_branch }}
+    steps:
+      # TODO: Revisit and simplify after https://github.com/orgs/community/discussions/40277 is resolved
+      - name: Fetch PR details for Merge Group Event
+        id: fetch-pr-details
+        if: github.event_name == 'merge_group'
+        run: |
+          pr_number=$(echo ${{ github.event.merge_group.head_ref }} | grep -Eo "queue/master/pr-[0-9]+" | cut -d '-' -f2)
+          pr_data=$(curl -sSL -H "Authorization: token ${{ secrets.AVX_AUTOMATION_WORKFLOW }}" \
+                    -H "Accept: application/vnd.github.v3+json" \
+                    "https://api.github.com/repos/${{ github.repository }}/pulls/$pr_number")
+          branch_name=$(echo "$pr_data" | jq -r '.head.ref')
+          echo "branch_name=$branch_name" >> $GITHUB_OUTPUT
+
+      - name: set branch
+        id: branch-name-based-on-trigger
+        shell: bash
+        env:
+          GITHUB_HEAD_REF: ${{ github.head_ref }}
+          merge_queue_branch_name: ${{ steps.fetch-pr-details.outputs.branch_name }}
+        run: |
+          br=${{ github.event_name == 'pull_request' && env.GITHUB_HEAD_REF ||
+                github.event_name == 'merge_group' && env.merge_queue_branch_name ||
+                github.event_name == 'workflow_dispatch' && github.event.inputs.test_branch_name }}
+          echo "branch=${br}" >> $GITHUB_OUTPUT
+          echo "branch=${br}" >> $GITHUB_ENV
+          echo "datetime=$(date -u +'%Y%m%d_%H%M%S')" >> $GITHUB_OUTPUT
+          echo "datetime=$(date -u +'%Y%m%d_%H%M%S')" >> $GITHUB_ENV
+
+      - name: set extra_args
+        id: set-extra-args
+        shell: bash
+        env:
+          GITHUB_HEAD_REF: ${{ github.head_ref }}
+        run: |
+          mc=${{ github.event_name == 'pull_request' && 'true' ||
+                github.event_name == 'workflow_dispatch' && github.event.inputs.manage_ctlr_dns_enabled }}
+          echo "manage_ctlr_dns_enabled=${mc}" >> $GITHUB_OUTPUT
+          echo "manage_ctlr_dns_enabled=${mc}" >> $GITHUB_ENV
+          ud=${{ github.event_name == 'pull_request' && 'true' ||
+                github.event_name == 'workflow_dispatch' && github.event.inputs.use_dns_for_ctlr_ip }}
+          echo "use_dns_for_ctlr_ip=${ud}" >> $GITHUB_OUTPUT
+          echo "use_dns_for_ctlr_ip=${mc}" >> $GITHUB_ENV
+
+      - name: Set testrail run name
+        id: testrail-run-name
+        env:
+          MARKER: ${{ env.marker }}
+          START_TIME: ${{ steps.branch-name-based-on-trigger.outputs.datetime}}
+          # SHA: ${{ env.short_sha }}
+          REPO: "cloudn"
+        shell: bash
+        run: |
+          long_sha=${{ github.sha }}
+          SHA=`echo $long_sha | cut -c 1-10`
+          echo "name=$MARKER-$START_TIME-$REPO-$SHA" >> $GITHUB_OUTPUT
+          echo "name=$MARKER-$START_TIME-$REPO-$SHA" >> $GITHUB_ENV
+
+      - name: Checkout cloudn repo
+        uses: actions/checkout@v4
+        env:
+          branch: ${{ steps.branch-name-based-on-trigger.outputs.branch }}
+        with:
+          ref: ${{ env.branch }}
+          path: ${{github.workspace}}/cloudn
+
+      - name: Create and checkout a temporary branch
+        if: github.event_name == 'merge_group'
+        id: create-temporary-branch
+        run: |
+          # Create a copy of the current feature branch, since the feature branch will be deleted when other required branch protection checks are merged
+          cd cloudn
+          CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          TEMP_BRANCH="merge-queue/${CURRENT_BRANCH}-$(date +%Y%m%d%H%M%S)"
+          echo "Creating temporary branch: $TEMP_BRANCH from ${{ env.branch }}"
+          git checkout -b $TEMP_BRANCH
+          git push origin "HEAD:refs/heads/${TEMP_BRANCH}"
+          echo "temp_branch=$TEMP_BRANCH" >> $GITHUB_ENV
+          echo "temp_branch=$TEMP_BRANCH" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+
+      - name: Set the branch to checkout
+        id: set_branch
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" == "merge_group" ]; then
+            echo "checkout_branch=${{ env.temp_branch }}" >> $GITHUB_ENV
+          else
+            echo "checkout_branch=${{ env.branch }}" >> $GITHUB_ENV
+          fi
+
+
+  execute-smoke-test-on-latest-build:
+    needs: [collect-tests-and-deploy-controller]
+    if: success()
+    name: Execute Smoke Test on Controller (${{ needs.collect-tests-and-deploy-controller.outputs.controller_version }})
+    runs-on: ubuntu-latest
+    env:
+      temp_branch: ${{ needs.collect-tests-and-deploy-controller.outputs.temp_branch }}
+      checkout_branch: ${{ needs.collect-tests-and-deploy-controller.outputs.checkout_branch }}
+      branch: ${{ needs.collect-tests-and-deploy-controller.outputs.branch }}
+      controller_version: ${{ needs.collect-tests-and-deploy-controller.outputs.controller_version }}
+      input_keep_topology: ${{ github.event.inputs.keep_topology }}
+      containerized_password: ${{ needs.collect-tests-and-deploy-controller.outputs.avx_password }}
+      non_containerized_password: ${{ secrets.CONTROLLER_E2E_PASSWORD }}
+      aviatrix_controller_key: ${{ secrets.E2E_CONTAINERIZED_CONTROLLER_KEY_CONTENT }}
+    timeout-minutes: 90
+    steps:
+      - name: Checkout cloudn (${{ env.branch }})
+        if: env.controller_deployment_result == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: AviatrixDev/cloudn
+          path: cloudn
+          ref: ${{ env.checkout_branch }}
+
+      - name: Delete temporary branch (if merge_group)
+        if: github.event_name == 'merge_group'
+        # TODO: Remove this continue-on-error: true after the issue is resolved, worst case we will have to delete quite a few temp branches per day until this is stable, but it's better than letting the PR in without testing
+        continue-on-error: true
+        run: |
+          cd cloudn
+          git config user.name "e2e-dev-smoke-test[bot]"
+          git config user.email "noreply@aviatrix.com"
+          git push origin --delete ${{ env.temp_branch }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
