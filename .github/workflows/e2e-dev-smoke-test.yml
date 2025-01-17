@@ -1,9 +1,3 @@
-# This workflow triggers the dev-smoke-test using the private containerized build generated from the per-pr-build workflow. The tests are initiated by the e2e-dev-smoke-test-with-per-pr-controller-bundle.yml when a PR is opened or synchronized.
-# Additionally, the tests are triggered under the following conditions:
-# 1. When a PR is created or updated with a new commit, running smoke test against the latest private build
-# 2. When a manual dispatch is initiated (typically for CI testing purposes).
-# 3. (TODO: This is a future enhancement) When a PR is approved and added to the merge queue. Eventually this would replace the e2e-dev-smoke-test.yml workflow.
-
 name: e2e-dev-smoke-test
 on:
   workflow_dispatch:
@@ -76,15 +70,6 @@ env:
   AVX_E2E_TEST_TESTRAIL_EMAIL: ${{ secrets.AVX_DEVSMOKE_TEST_TESTRAIL_EMAIL }}
   AVX_E2E_TEST_TESTRAIL_PASSWORD: ${{ secrets.AVX_DEVSMOKE_TEST_TESTRAIL_PASSWORD }}
   aviatrix_aws_iam_access_account: "AWSIAM"
-  tf_working_directory: "${{ github.workspace }}/cloudn/test-scripts/end-to-end/vendor/controller"
-  ssh_enable_phrase: "${{ secrets.AVX_SSH_ENABLE_7_0 }}"
-  avx_user: "admin"
-  avx_password: "${{ secrets.CONTROLLER_E2E_PASSWORD }}"
-  avx_account: "devtools-test"
-  avx_tf_version: "1.4.6"
-  aviatrix_admin_email: "devtools@aviatrix.com"
-  aviatrix_license_id: "aviatrix.com-fbu-99d2b09d-1645742295.44"
-  cloudn_scripts_x_py_image: "ghcr.io/aviatrixdev/e2e_ubuntu_22-04:202309131600"
   testrail_url: "https://aviatrix.testrail.io"
   testrail_project_id: 9
   testrail_suite_id: 104
