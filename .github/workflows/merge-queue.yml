@@ -2,64 +2,16 @@ name: e2e-dev-smoke-test
 on:
   workflow_dispatch:
     inputs:
-      containerized:
-        description: "Run the tests in a container"
-        required: false
-        default: false
-        type: boolean
       test_branch_name:
         description: "Test branch name"
         required: true
         type: string
-      keep_controller:
-        description: "Keep controller for debugging purposes"
-        required: false
-        default: false
-        type: boolean
-      keep_topology:
-        description: "Keep Topology for debugging purposes only. Please use discretion"
-        required: false
-        default: false
-        type: boolean
-      testsuites:
-        description: "Comma-separated list of test suite names, overwrites label"
-        required: false
-        type: string
-      ami_id:
-        description: "Controller AMI ID"
-        required: false
-        type: string
-      controller_version:
-        description: "Controller (init) version or Per PR build version"
-        required: true
-        type: string
-      setup_copilot:
-        description: "Skip controller prep, by default will be False unless with Per PR build"
-        required: false
-        default: false
-        type: boolean
-      use_dns_for_ctlr_ip:
-        description: "Use DNS for controller IP"
-        required: true
-        default: true
-        type: boolean
-      manage_ctlr_dns_enabled:
-        description: "Enable manage controller DNS"
-        required: true
-        default: true
-        type: boolean
 
   workflow_call:
     inputs:
-      controller_version:
-        required: true
-        type: string
       test_branch_name:
         required: true
         type: string
-      containerized:
-        required: false
-        type: boolean
 
 env:
   AWS_REGION: us-east-1
@@ -68,7 +20,6 @@ env:
   marker: "e2e_devsmoke"
   label: "e2e_devsmoke:run"
   default_branch_name: ${{ github.ref_name }}
-  ami_id: ${{ github.event.inputs.ami_id }}
   enhanced_ubuntu_image: "ghcr.io/aviatrixdev/cloudn-e2e-base:latest"
   cloudn_scripts_git_ref: "main"
   release_process_git_ref: "main"
@@ -87,11 +38,10 @@ permissions:
   id-token: write
 jobs:
   collect-tests-and-deploy-controller:
-    name: Collect Tests & Deploy Controller (${{ inputs.controller_version || github.event.inputs.controller_version }})
+    name: Collect Tests & Deploy Controller
     if: success()
     runs-on: ubuntu-latest
     env:
-      controller_version: ${{ inputs.controller_version || github.event.inputs.controller_version }}
       test_branch_name: ${{ github.event.inputs.test_branch_name }}
       default_branch_name: "main"
       default_no_destroy_args: ""
@@ -140,11 +90,11 @@ jobs:
           GITHUB_HEAD_REF: ${{ github.head_ref }}
         run: |
           mc=${{ github.event_name == 'pull_request' && 'true' ||
-                github.event_name == 'workflow_dispatch' && github.event.inputs.manage_ctlr_dns_enabled }}
+                github.event_name == 'workflow_dispatch'  }}
           echo "manage_ctlr_dns_enabled=${mc}" >> $GITHUB_OUTPUT
           echo "manage_ctlr_dns_enabled=${mc}" >> $GITHUB_ENV
           ud=${{ github.event_name == 'pull_request' && 'true' ||
-                github.event_name == 'workflow_dispatch' && github.event.inputs.use_dns_for_ctlr_ip }}
+                github.event_name == 'workflow_dispatch' }}
           echo "use_dns_for_ctlr_ip=${ud}" >> $GITHUB_OUTPUT
           echo "use_dns_for_ctlr_ip=${mc}" >> $GITHUB_ENV
 
@@ -208,7 +158,6 @@ jobs:
       checkout_branch: ${{ needs.collect-tests-and-deploy-controller.outputs.checkout_branch }}
       branch: ${{ needs.collect-tests-and-deploy-controller.outputs.branch }}
       controller_version: ${{ needs.collect-tests-and-deploy-controller.outputs.controller_version }}
-      input_keep_topology: ${{ github.event.inputs.keep_topology }}
       containerized_password: ${{ needs.collect-tests-and-deploy-controller.outputs.avx_password }}
       non_containerized_password: ${{ secrets.CONTROLLER_E2E_PASSWORD }}
       aviatrix_controller_key: ${{ secrets.E2E_CONTAINERIZED_CONTROLLER_KEY_CONTENT }}
