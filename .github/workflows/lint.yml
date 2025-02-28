@@ -17,6 +17,17 @@ jobs:
         with:
           files: "**/*.py"
 
+      - name: Check if any files changed
+        id: check-changed-files
+        run: |
+          if [ -z "${{ steps.changed-files.outputs.all_changed_files }}" ]; then
+            echo "✅ No Python File Change in this PR, skipping CI Check." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          else
+            echo "Python files changed. Continuing."
+            echo "file_changed=true" >> $GITHUB_ENV
+          fi
+
       - name: Setup Python env
         uses: actions/setup-python@v5
         with:
