@@ -1,4 +1,4 @@
-name: Black (python)
+name: Black and Pylint (python)
 
 on: [pull_request]
 
