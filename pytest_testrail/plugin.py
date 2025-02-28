@@ -6,7 +6,6 @@ import jira
 import os
 import pytest
 import re
-import sys
 import warnings
 import logging
 from datetime import datetime
