@@ -1,0 +1,83 @@
+name: Black (python)
+
+on: [pull_request]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Get changed files
+        id: changed-files
+        uses: tj-actions/changed-files@40853de9f8ce2d6cfdc73c1b96f14e22ba44aec4 # v45.0.0
+        with:
+          files: "**/*.py"
+
+      - name: Setup Python env
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install linters
+        run: pip install black pylint
+
+      - name: Create and install dependencies in virtual environment
+        if: env.file_changed == 'true'
+        run: |
+          python3 -m venv venv
+          ./venv/bin/python -m pip install --upgrade pip
+          ./venv/bin/python -m pip install "black~=23.0" "pylint~=2.17"
+
+      - name: Check formatting and lint changed Python files
+        if: env.file_changed == 'true'
+        env:
+          PYTHON3: ./venv/bin/python
+        run: |
+          set +euo pipefail
+          format_exit_status=0
+          lint_exit_status=0
+          files=$(echo "${{ steps.changed-files.outputs.all_changed_files }}" | xargs)
+          
+          $PYTHON3 -m black --check $files
+          format_exit_status=$?
+          if [ $format_exit_status -ne 0 ]; then
+              echo "Python formatting issue detected by Black."
+              BLACK_OUTPUT=$($PYTHON3 -m black --diff $files 2>&1)
+          fi
+          echo "Black exit status: $format_exit_status"
+
+          $PYTHON3 -m pylint $files
+          lint_exit_status=$?
+          if [ $lint_exit_status -ne 0 ]; then
+              echo "Python linting issue detected by pylint."
+              PYLINT_OUTPUT=$($PYTHON3 -m pylint $files 2>&1)
+          fi
+          echo "Pylint exit status: $lint_exit_status"
+
+          SUMMARY=""
+          echo $lint_exit_status
+          echo $format_exit_status
+          echo "black and pylint output for changed files: $files" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$BLACK_OUTPUT" ]; then
+            SUMMARY="${SUMMARY}\n### Black Output\n\`\`\`\n$BLACK_OUTPUT\n\`\`\`\n"
+          fi
+          if [ -n "$PYLINT_OUTPUT" ]; then
+            SUMMARY="${SUMMARY}\n### Pylint Output\n\`\`\`\n$PYLINT_OUTPUT\n\`\`\`\n"
+          fi
+
+          if [ $format_exit_status -ne 0 ] || [ $lint_exit_status -ne 0 ]; then
+            echo "❌ Black or pylint found issues in the code. Please fix them before committing." >> "$GITHUB_STEP_SUMMARY"
+            if [ -n "$SUMMARY" ]; then
+              echo -e "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            echo "✅ No formatting or lint issues detected." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # TODO: Fail the CI pipeline if there are any issues
+          exit 1

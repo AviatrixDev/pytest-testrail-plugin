@@ -1,0 +1,21 @@
+name: PR Format Checker
+
+on:
+    pull_request:
+        types: [opened, edited, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+    contents: read
+    checks: read
+    statuses: read
+
+jobs:
+    aviatrix-check:
+        uses: AvxSre/sre-workflows/.github/workflows/aviatrix.yml@main
+        with:
+            jira-check: true
+            jira-regex: '^[A-Z]+-[0-9]+[[:space:]:].*'
+            jira-max-length: 120
+            jira-check-commits: false
+            merge-all-checks: true
+            semgrep-check: true
