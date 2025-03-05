@@ -20,6 +20,6 @@ jobs:
               uses: upsidr/merge-gatekeeper@v1
               with:
                 token: ${{ secrets.GITHUB_TOKEN }}
-                ignored: "aviatrix-check / merge-all-checks,aviatrix-checks / merge-all-checks"
+                ignored: "aviatrix-check"
                 timeout: 3600
                 interval: 10
